@@ -50221,8 +50221,26 @@ function applyPatch(pnpapi, opts) {
     }; // Check if the module has already been created for the given file
 
     const cacheEntry = entry.cache[modulePath];
-    if (cacheEntry) return cacheEntry.exports; // Create a new module and store it into the cache
+
+    if (cacheEntry) {
+      // @ts-expect-error
+      if (!cacheEntry.loaded && !cacheEntry.isLoading && typeof cacheEntry.load === `function`) {
+        // @ts-expect-error
+        cacheEntry.isLoading = true;
+
+        try {
+          // @ts-expect-error
+          cacheEntry.load(modulePath);
+        } finally {
+          // @ts-expect-error
+          cacheEntry.isLoading = false;
+        }
+      }
+
+      return cacheEntry.exports;
+    } // Create a new module and store it into the cache
     // @ts-expect-error
+
 
     const module = new external_module_.Module(modulePath, parent); // @ts-expect-error
 
@@ -50239,7 +50257,11 @@ function applyPatch(pnpapi, opts) {
 
     try {
       // @ts-expect-error
-      module.load(modulePath);
+      module.isLoading = true; // @ts-expect-error
+
+      module.load(modulePath); // @ts-expect-error
+
+      module.isLoading = false;
       hasThrown = false;
     } finally {
       if (hasThrown) {
@@ -50836,7 +50858,7 @@ function makeApi(runtimeState, opts) {
    */
 
 
-  function applyNodeExportsResolution(unqualifiedPath) {
+  function applyNodeExportsResolution(unqualifiedPath, conditions = new Set()) {
     const locator = findPackageLocator(ppath.join(unqualifiedPath, `internal.js`), {
       resolveIgnored: true,
       includeDiscardFromLookup: true
@@ -50860,11 +50882,12 @@ function makeApi(runtimeState, opts) {
 
     if (!isRelativeRegexp.test(subpath)) subpath = `./${subpath}`;
     const resolvedExport = resolve(pkgJson, ppath.normalize(subpath), {
-      browser: false,
-      require: true,
+      browser: conditions.has(`browser`),
+      require: conditions.size === 0 ? true : conditions.has(`require`),
       // TODO: implement support for the --conditions flag
       // Waiting on https://github.com/nodejs/node/issues/36935
-      conditions: []
+      // @ts-expect-error - Type should be Set | Array
+      conditions
     });
     if (typeof resolvedExport === `string`) return ppath.join(packageLocation, resolvedExport);
     return null;
@@ -51369,10 +51392,10 @@ function makeApi(runtimeState, opts) {
     return ppath.normalize(unqualifiedPath);
   }
 
-  function resolveUnqualifiedExport(request, unqualifiedPath) {
+  function resolveUnqualifiedExport(request, unqualifiedPath, conditions = new Set()) {
     // "exports" only apply when requiring a package, not when requiring via an absolute / relative path
     if (isStrictRegExp.test(request)) return unqualifiedPath;
-    const unqualifiedExportPath = applyNodeExportsResolution(unqualifiedPath);
+    const unqualifiedExportPath = applyNodeExportsResolution(unqualifiedPath, conditions);
 
     if (unqualifiedExportPath) {
       return ppath.normalize(unqualifiedExportPath);
@@ -51414,7 +51437,8 @@ function makeApi(runtimeState, opts) {
 
   function resolveRequest(request, issuer, {
     considerBuiltins,
-    extensions
+    extensions,
+    conditions
   } = {}) {
     const unqualifiedPath = resolveToUnqualified(request, issuer, {
       considerBuiltins
@@ -51423,7 +51447,7 @@ function makeApi(runtimeState, opts) {
 
     const isIssuerIgnored = () => issuer !== null ? isPathIgnored(issuer) : false;
 
-    const remappedPath = (!considerBuiltins || !isBuiltinModule(request)) && !isIssuerIgnored() ? resolveUnqualifiedExport(request, unqualifiedPath) : unqualifiedPath;
+    const remappedPath = (!considerBuiltins || !isBuiltinModule(request)) && !isIssuerIgnored() ? resolveUnqualifiedExport(request, unqualifiedPath, conditions) : unqualifiedPath;
 
     try {
       return resolveUnqualified(remappedPath, {
